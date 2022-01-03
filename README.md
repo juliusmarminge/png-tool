@@ -13,6 +13,7 @@ $ ./build.sh
 
 ### Usage
 The program can be used in two different ways:
+
 a) Read the content of a given PNG file
 ```console
 $ ./png -r <input_png_file>
