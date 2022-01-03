@@ -117,9 +117,21 @@ void reverse_bytes(void *buf0, size_t buf_cap)
     }
 }
 
+bool chunk_is_valid(void *buf0) {
+    uint8_t *chunk_type = buf0;
+    if (*(uint32_t*)chunk_type == 0x52444849 ||
+        *(uint32_t*)chunk_type == 0x54414449 ||
+        *(uint32_t*)chunk_type == 0x444E4549) {
+        return true;
+    }
+    return false;
+}
+
 void usage(FILE *file, char *program)
 {
-    fprintf(file, "Usage: %s <input.png> <output.png>\n", program);
+    fprintf(file, "Usage: %s -r <input.png> or \n"
+                  "       %s -i <input.png> <output.png> <injected_msg>\n", 
+            program, program);
 }
 
 #define CHUNK_BUF_CAP (32 * 1024)
@@ -135,18 +147,56 @@ int main(int argc, char **argv)
 
     if (*argv == NULL) {
         usage(stderr, program);
+        fprintf(stderr, "ERROR: mode not specified\n");
+        exit(1);
+    }
+
+    char *flag = *argv++;
+    char mode;
+    if (flag[0] != '-') {
+        usage(stderr, program);
+        fprintf(stderr, "ERROR: invalid mode selection\n");
+        exit(1);
+    }
+    if (flag[1] == 'r') {
+        mode = 'r';
+    }
+    else if (flag[1] == 'i') {
+        mode = 'i';
+    }
+    else {
+        usage(stderr, program);
+        fprintf(stderr, "ERROR: invalid mode selection\n");
+        exit(1);
+    }
+    if (*argv == NULL) {
+        usage(stderr, program);
         fprintf(stderr, "ERROR: no input file is provided\n");
         exit(1);
     }
+
     char *input_filepath = *argv++;
+    
+    char *output_filepath = "tmp";
+    char *injected_type = "imSG";
+    char *injected_msg = "";
+    if (mode == 'i') {
+        if (*argv == NULL) {
+            usage(stderr, program);
+            fprintf(stderr, "ERROR: no output file is provided\n");
+            exit(1);
+        }
 
-    if (*argv == NULL) {
-        usage(stderr, program);
-        fprintf(stderr, "ERROR: no ouptut file is provided\n");
-        exit(1);
+        output_filepath = *argv++;
+
+        if (*argv == NULL) {
+            usage(stderr, program);
+            fprintf(stderr, "ERROR: no injection message is provided\n");
+            exit(1);
+        }
+
+        injected_msg = *argv++;
     }
-    char *output_filepath = *argv++;
-
     FILE *input_file = fopen(input_filepath, "rb");
     if (input_file == NULL) {
         fprintf(stderr, "ERROR: could not open file %s: %s\n",
@@ -164,8 +214,10 @@ int main(int argc, char **argv)
     uint8_t sig[PNG_SIG_CAP];
     read_bytes_or_panic(input_file, sig, PNG_SIG_CAP);
     write_bytes_or_panic(output_file, sig, PNG_SIG_CAP);
-    printf("Signature: ");
-    print_bytes(sig, PNG_SIG_CAP);
+    if (mode == 'r') {
+        printf("Signature: ");
+        print_bytes(sig, PNG_SIG_CAP);
+    }
     if (memcmp(sig, png_sig, PNG_SIG_CAP) != 0) {
         fprintf(stderr, "ERROR: %s does not appear to be a valid PNG image\n",
                 input_filepath);
@@ -182,12 +234,17 @@ int main(int argc, char **argv)
         uint8_t chunk_type[4];
         read_bytes_or_panic(input_file, chunk_type, sizeof(chunk_type));
         write_bytes_or_panic(output_file, chunk_type, sizeof(chunk_type));
+        bool chunk_valid = chunk_is_valid(chunk_type);
 
         if (*(uint32_t*)chunk_type == 0x444E4549) {
             quit = true;
         }
 
         size_t n = chunk_sz;
+        if (!chunk_valid) 
+        {
+            printf("Chunk msg:  ");
+        }
         while (n > 0) {
             size_t m = n;
             if (m > CHUNK_BUF_CAP) {
@@ -195,6 +252,9 @@ int main(int argc, char **argv)
             }
             read_bytes_or_panic(input_file, chunk_buf, m);
             write_bytes_or_panic(output_file, chunk_buf, m);
+            if (mode == 'r' && !chunk_valid) {
+                write_bytes_or_panic(stdout, chunk_buf, m);
+            }
             n -= m;
         }
 
@@ -202,31 +262,35 @@ int main(int argc, char **argv)
         read_bytes_or_panic(input_file, &chunk_crc, sizeof(chunk_crc));
         write_bytes_or_panic(output_file, &chunk_crc, sizeof(chunk_crc));
 
-        if (*(uint32_t*)chunk_type == 0x52444849) {
-            uint32_t injected_sz = 3;
+        if (*(uint32_t*)chunk_type == 0x52444849 && mode == 'i') {
+            uint32_t injected_sz = strlen(injected_msg);
+            printf("Injected chunk size: %d\n", injected_sz);
             reverse_bytes(&injected_sz, sizeof(injected_sz));
             write_bytes_or_panic(output_file, &injected_sz, sizeof(injected_sz));
             reverse_bytes(&injected_sz, sizeof(injected_sz));
 
-            char *injected_type = "coCK";
             write_bytes_or_panic(output_file, injected_type, 4);
 
-            write_bytes_or_panic(output_file, "YEP", injected_sz);
+            write_bytes_or_panic(output_file, injected_msg, injected_sz);
 
             uint32_t injected_crc = 0;//crc("YEP", injected_sz);
             write_bytes_or_panic(output_file, &injected_crc, sizeof(injected_crc));
         }
-
-        printf("Chunk size: %u\n", chunk_sz);
-        printf("Chunk type: %.*s (0x%08X)\n",
-               (int) sizeof(chunk_type), chunk_type,
-               *(uint32_t*) chunk_type);
-        printf("Chunk CRC:  0x%08X\n", chunk_crc);
-        printf("------------------------------\n");
+        if (mode == 'r') {
+            if (!chunk_is_valid(chunk_type)) putc('\n', stdout);
+            printf("Chunk size: %u\n", chunk_sz);
+            printf("Chunk type: %.*s (0x%08X)\n",
+                (int) sizeof(chunk_type), chunk_type,
+                *(uint32_t*) chunk_type);
+            printf("Chunk CRC:  0x%08X\n", chunk_crc);
+            printf("------------------------------\n");
+        }
     }
 
     fclose(input_file);
     fclose(output_file);
-
+    if (mode == 'r') {
+        system("rm tmp");
+    }
     return 0;
 }
