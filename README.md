@@ -2,7 +2,7 @@
 
 ## LICENSE
 
-This project is based on Alexey Kutepov's project found here: https://gitlab.com/tsoding/png which is licensed as described in `original-license`. The modified code is licensed as described in `LICENSE`.
+This project is based on Alexey Kutepov's project found here: https://gitlab.com/tsoding/png which is licensed by `original-license`. The modified code is licensed by `LICENSE`.
 
 ## Quick Start
 
